@@ -1,5 +1,5 @@
 /**
- *  SuperEdge_无注释版 v1.8.1
+ *  SuperEdge_无注释版 v1.8.3
  * 【Path 格式】（全部以 /api/v1/chat 开头）
  *   纯直连        : ?ed=2560
  *   proxyip 备用  : ?ed=2560&ip=1.2.3.4:443
@@ -10,14 +10,14 @@
  *   低延迟模式    : 任意 path 后追加 &ll=1（SSH / 游戏 / 实时交互）
  *
  * 【出站优先级】
- *   g5-* / gh-* → 单路径全局代理，不 fallback（带超时兜底）
- *   其他        → Happy Eyeballs：直连 / s5 / h / ip 按 stagger 梯度并发竞速
+ *   g5 / gh → 单路径全局代理，不 fallback（带超时兜底）
+ *   其他    → Happy Eyeballs：直连 / s5 / h / ip 按 stagger 梯度并发竞速
  */
 
 import { connect } from 'cloudflare:sockets';
 
 const CFG = {
-  id: 'UUID',        // ← 改成你自己的 UUID（标准 36 位带连字符），不要带空格。
+  id: 'UUID',
 
   chunk: 64 * 1024,
   dnPack: 32 * 1024,
@@ -417,7 +417,8 @@ const FAIL_CACHE = new Map();
 
 const markFail = key => {
   const now = Date.now();
-  if (FAIL_CACHE.size >= CFG.failCacheMax) {
+  if (FAIL_CACHE.has(key)) FAIL_CACHE.delete(key);
+  else if (FAIL_CACHE.size >= CFG.failCacheMax) {
     const first = FAIL_CACHE.keys().next().value;
     if (first !== undefined) FAIL_CACHE.delete(first);
   }
@@ -748,7 +749,7 @@ const render502 = b64sid => `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>502 Bad Gateway</title>
 <style>
-  :root { --bg:#f1f1f1; --ink:#333; --muted:#999; --line:#e5e7eb; --accent:#e05454; --accent-hover:#c94848; --mono: ui-monospace, Menlo, Consolas, monospace; }
+  :root { --bg:#f1f1f1; --ink:#333; --muted:#999; --line:#e5e7eb; --accent:#e05454; --accent-hover:#c94848; --warn:#f59e0b; --warn-hover:#d97706; --mono: ui-monospace, Menlo, Consolas, monospace; }
   * { box-sizing: border-box; }
   body { background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; min-height: 100vh; display: flex; justify-content: center; align-items: center; margin: 0; padding: 24px; line-height: 1.5; }
   .container { text-align: center; max-width: 600px; padding: 40px; }
@@ -758,12 +759,15 @@ const render502 = b64sid => `<!DOCTYPE html>
   #trigger { cursor: pointer; transition: color .2s, font-weight .2s; user-select: none; }
   #trigger:hover { color: var(--accent); font-weight: 600; text-decoration: underline; }
 
-  #pn { position: fixed; right: 16px; bottom: 16px; width: 380px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow-y: auto; padding: 18px; background: #fff; border-radius: 10px; box-shadow: 0 6px 28px rgba(0,0,0,0.18); border: 1px solid var(--line); display: none; text-align: left; font-size: 13px; z-index: 9999; }
+  #pn { position: fixed; right: 16px; top: 16px; width: 400px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow-y: auto; padding: 18px; background: #fff; border-radius: 10px; box-shadow: 0 6px 28px rgba(0,0,0,0.18); border: 1px solid var(--line); display: none; text-align: left; font-size: 13px; z-index: 9999; }
   #pn h3 { margin: 0 0 10px 0; font-size: 14px; font-weight: 600; }
   #pn .close { float: right; cursor: pointer; color: #bbb; font-size: 20px; line-height: 1; user-select: none; }
   #pn .close:hover { color: #666; }
-  .meta { font-size: 11px; color: var(--muted); background: #fafafa; border: 1px dashed var(--line); border-radius: 5px; padding: 6px 9px; margin-bottom: 14px; word-break: break-all; }
-  .meta b { color: var(--accent); font-weight: 600; }
+
+  .meta { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; row-gap: 4px; align-items: baseline; font-size: 11px; background: #fafafa; border: 1px dashed var(--line); border-radius: 5px; padding: 8px 10px; margin-bottom: 14px; }
+  .meta .k { color: #999; white-space: nowrap; }
+  .meta .v { color: var(--accent); font-family: var(--mono); font-weight: 600; word-break: break-all; line-height: 1.4; }
+
   .field { margin-bottom: 12px; }
   label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
   input[type="text"], select { width: 100%; padding: 7px 9px; border: 1px solid #ddd; border-radius: 5px; font-size: 12px; font-family: var(--mono); background: #fff; outline: none; }
@@ -773,19 +777,31 @@ const render502 = b64sid => `<!DOCTYPE html>
   .collapse { display: none; }
   .collapse.open { display: block; }
   .divider { border-top: 1px dashed #eee; margin: 14px 0; padding-top: 12px; }
-  .divider h4 { margin: 0 0 2px 0; font-size: 13px; }
-  .divider .desc { font-size: 11px; color: var(--muted); margin: 0 0 12px 0; }
+  .divider h4 { margin: 0 0 10px 0; font-size: 13px; }
   .out-row { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; }
   .out-row input { flex: 1; }
-  button { padding: 7px 12px; border: none; border-radius: 5px; background: var(--accent); color: #fff; cursor: pointer; font-size: 12px; }
+  button { padding: 7px 12px; border: none; border-radius: 5px; background: var(--accent); color: #fff; cursor: pointer; font-size: 12px; transition: background .15s; }
   button:hover { background: var(--accent-hover); }
   button.sec { background: #666; }
   button.sec:hover { background: #555; }
+  button.ghost { background: #fff; color: #666; border: 1px solid #ddd; }
+  button.ghost:hover { background: #f5f5f5; color: #333; }
+  button.gen { width: 100%; padding: 10px 12px; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+  button.gen.dirty { background: var(--warn); }
+  button.gen.dirty:hover { background: var(--warn-hover); }
+  .actions { display: flex; gap: 6px; margin-bottom: 12px; }
+  .actions button { flex: 1; }
   .ok { color: #2a9d2a; font-size: 11px; margin-left: 6px; }
-  .note { margin-top: 10px; color: #aaa; font-size: 11px; line-height: 1.5; }
-  .warn { color: #e05454; font-weight: 600; }
+  .foot { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #eee; color: #aaa; font-size: 11px; line-height: 1.6; }
+  .foot .warn { color: var(--accent); font-weight: 600; }
+  .foot .ver { float: right; color: #ccc; }
   .chk { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #666; }
   .chk input { width: auto; }
+  #qr-wrap { display: none; margin-top: 12px; padding: 12px; border: 1px dashed var(--line); border-radius: 8px; text-align: center; background: #fafafa; }
+  #qr-wrap.show { display: block; }
+  #qr-wrap svg { display: block; margin: 0 auto; width: 200px; height: 200px; image-rendering: pixelated; }
+  #qr-wrap .qr-note { margin-top: 8px; color: var(--muted); font-size: 11px; }
+  #qr-wrap .qr-err { color: var(--accent); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -798,7 +814,7 @@ const render502 = b64sid => `<!DOCTYPE html>
 
 <div id="pn">
   <span class="close" id="pnc">×</span>
-  <h3>节点生成器 · SuperEdge v1.8.1</h3>
+  <h3>节点生成器</h3>
 
   <div class="meta" id="meta"></div>
 
@@ -821,38 +837,42 @@ const render502 = b64sid => `<!DOCTYPE html>
 
   <div id="f-proxy" class="collapse">
     <div class="field">
-      <label>完整代理链接（可选，粘贴后自动填充）</label>
-      <input id="pr-link" type="text" placeholder="socks5://user:pass@1.2.3.4:1080 或 http://1.2.3.4:8080">
+      <label>粘贴完整链接（自动识别）</label>
+      <input id="pr-link" type="text" placeholder="socks5://user:pass@1.2.3.4:1080">
     </div>
     <div class="field">
-      <label>代理地址</label>
+      <label>代理服务器</label>
       <input id="pr-host" type="text" placeholder="1.2.3.4:1080">
     </div>
     <div class="row">
       <div class="field">
-        <label>用户名（可选）</label>
-        <input id="pr-user" type="text" placeholder="user">
+        <label>用户名</label>
+        <input id="pr-user" type="text" placeholder="可选">
       </div>
       <div class="field">
-        <label>密码（可选）</label>
-        <input id="pr-pass" type="text" placeholder="pass">
+        <label>密码</label>
+        <input id="pr-pass" type="text" placeholder="可选">
       </div>
     </div>
   </div>
 
   <div class="field">
-    <label>名称</label>
-    <input id="nm" type="text" value="SuperEdge v1.8.1">
+    <label>节点名称</label>
+    <input id="nm" type="text" value="SuperEdge">
   </div>
 
   <div class="field chk">
     <input id="lowlat" type="checkbox">
-    <label for="lowlat" style="margin:0;cursor:pointer">低延迟模式（SSH / 游戏 / 实时交互）</label>
+    <label for="lowlat" style="margin:0;cursor:pointer">低延迟模式 · 适合 SSH / 游戏 / 实时通信</label>
   </div>
 
   <div class="divider">
     <h4>生成结果</h4>
-    <p class="desc">输入变化时自动刷新。</p>
+    <button id="gen-btn" class="gen">生成</button>
+    <div class="actions">
+      <button id="qr-btn" class="ghost">显示二维码</button>
+      <button id="reset-btn" class="ghost">重置</button>
+    </div>
     <div class="out-row">
       <input id="out-path" type="text" readonly onclick="this.select()" placeholder="Path 将在此显示">
       <button class="sec" id="cp-path">复制</button>
@@ -863,33 +883,335 @@ const render502 = b64sid => `<!DOCTYPE html>
       <button class="sec" id="cp-vless">复制</button>
       <span class="ok" id="ok-vless"></span>
     </div>
+    <div id="qr-wrap">
+      <div id="qr-box"></div>
+      <div class="qr-note" id="qr-note">本地生成 · 链接不会上传</div>
+    </div>
   </div>
 
-  <p class="note"><span class="warn">请勿公开分享此页面</span>，UUID 已注入。节点配置由服务端自动同步。</p>
+  <p class="foot">
+    <span class="warn">此页面包含你的 UUID，请勿公开分享</span>
+    <span class="ver">v1.8.3</span>
+  </p>
 </div>
 
 <script>
+var QR = (function () {
+  var EXP = new Uint8Array(512), LOG = new Uint8Array(256);
+  for (var i = 0, x = 1; i < 255; i++) {
+    EXP[i] = x; LOG[x] = i;
+    x = (x << 1) ^ ((x & 0x80) ? 0x11D : 0);
+  }
+  for (var i = 255; i < 512; i++) EXP[i] = EXP[i - 255];
+  var mul = function (a, b) { return (a && b) ? EXP[LOG[a] + LOG[b]] : 0; };
+
+  function rsEnc(data, n) {
+    var g = [1];
+    for (var i = 0; i < n; i++) {
+      var ng = new Array(g.length + 1).fill(0);
+      for (var j = 0; j < g.length; j++) {
+        ng[j] ^= mul(g[j], 1);
+        ng[j + 1] ^= mul(g[j], EXP[i]);
+      }
+      g = ng;
+    }
+    var res = new Array(data.length + n).fill(0);
+    for (var i = 0; i < data.length; i++) res[i] = data[i];
+    for (var i = 0; i < data.length; i++) {
+      var c = res[i];
+      if (!c) continue;
+      for (var j = 0; j < g.length; j++) res[i + j] ^= mul(g[j], c);
+    }
+    return res.slice(data.length);
+  }
+
+  var V = [
+    null,
+    [19, [[1, 19]], 7],
+    [34, [[1, 34]], 10],
+    [55, [[1, 55]], 15],
+    [80, [[1, 80]], 20],
+    [108, [[1, 108]], 26],
+    [136, [[2, 68]], 18],
+    [156, [[2, 78]], 20],
+    [194, [[2, 97]], 24],
+    [232, [[2, 116]], 30],
+    [274, [[2, 68], [2, 69]], 18],
+    [324, [[4, 81]], 20],
+    [370, [[2, 92], [2, 93]], 24],
+    [428, [[4, 107]], 26],
+    [461, [[3, 115], [1, 116]], 30],
+    [523, [[5, 87], [1, 88]], 22],
+    [589, [[5, 98], [1, 99]], 24],
+    [647, [[1, 107], [5, 108]], 28],
+    [721, [[5, 120], [1, 121]], 30],
+    [795, [[3, 113], [4, 114]], 28],
+    [861, [[3, 107], [5, 108]], 28],
+  ];
+
+  var APOS = [
+    null, [], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34], [6, 22, 38], [6, 24, 42], [6, 26, 46],
+    [6, 28, 50], [6, 30, 54], [6, 32, 58], [6, 34, 62], [6, 26, 46, 66], [6, 26, 48, 70],
+    [6, 26, 50, 74], [6, 30, 54, 78], [6, 30, 56, 82], [6, 30, 58, 86], [6, 34, 62, 90],
+  ];
+
+  var VINFO = [
+    null, null, null, null, null, null, null,
+    0x07C94, 0x085BC, 0x09A99, 0x0A4D3, 0x0BBF6, 0x0C762, 0x0D847,
+    0x0E60D, 0x0F928, 0x10B78, 0x1145D, 0x12A17, 0x13532, 0x149A6,
+  ];
+
+  var FMT = [0x77C4, 0x72F3, 0x7DAA, 0x789D, 0x662F, 0x6318, 0x6C41, 0x6976];
+
+  function encode(text) {
+    var bytes = new TextEncoder().encode(text);
+    var ver = -1;
+    for (var v = 1; v < V.length; v++) {
+      var capCW = V[v][0];
+      var overhead = 4 + (v < 10 ? 8 : 16);
+      if (overhead + bytes.length * 8 <= capCW * 8) { ver = v; break; }
+    }
+    if (ver < 0) return null;
+
+    var info = V[ver];
+    var totalDataCW = info[0];
+    var blocks = info[1];
+    var ecPerBlock = info[2];
+
+    var bits = [];
+    function put(val, n) { for (var i = n - 1; i >= 0; i--) bits.push((val >> i) & 1); }
+    put(4, 4);
+    put(bytes.length, ver < 10 ? 8 : 16);
+    for (var i = 0; i < bytes.length; i++) put(bytes[i], 8);
+
+    var capBits = totalDataCW * 8;
+    var term = Math.min(4, capBits - bits.length);
+    for (var i = 0; i < term; i++) bits.push(0);
+    while (bits.length % 8) bits.push(0);
+    var pad = [0xEC, 0x11], pi = 0;
+    while (bits.length < capBits) put(pad[pi++ % 2], 8);
+
+    var dataBytes = new Uint8Array(totalDataCW);
+    for (var i = 0; i < totalDataCW; i++) {
+      var b = 0;
+      for (var j = 0; j < 8; j++) b = (b << 1) | bits[i * 8 + j];
+      dataBytes[i] = b;
+    }
+
+    var blkList = [], off = 0;
+    for (var bi = 0; bi < blocks.length; bi++) {
+      var cnt = blocks[bi][0], blen = blocks[bi][1];
+      for (var k = 0; k < cnt; k++) {
+        var d = dataBytes.slice(off, off + blen);
+        off += blen;
+        blkList.push({ data: d, ec: new Uint8Array(rsEnc(Array.from(d), ecPerBlock)) });
+      }
+    }
+
+    var maxDL = 0;
+    for (var i = 0; i < blkList.length; i++) if (blkList[i].data.length > maxDL) maxDL = blkList[i].data.length;
+    var inter = [];
+    for (var i = 0; i < maxDL; i++) for (var b = 0; b < blkList.length; b++) {
+      if (i < blkList[b].data.length) inter.push(blkList[b].data[i]);
+    }
+    for (var i = 0; i < ecPerBlock; i++) for (var b = 0; b < blkList.length; b++) inter.push(blkList[b].ec[i]);
+    return buildMatrix(ver, new Uint8Array(inter));
+  }
+
+  function buildMatrix(ver, bytes) {
+    var size = ver * 4 + 17;
+    var mat = []; for (var i = 0; i < size; i++) mat.push(new Uint8Array(size));
+    var res = []; for (var i = 0; i < size; i++) res.push(new Uint8Array(size));
+
+    function placeFinder(r0, c0) {
+      for (var dr = -1; dr <= 7; dr++) for (var dc = -1; dc <= 7; dc++) {
+        var r = r0 + dr, c = c0 + dc;
+        if (r < 0 || r >= size || c < 0 || c >= size) continue;
+        var on =
+          (dr >= 0 && dr <= 6 && (dc === 0 || dc === 6)) ||
+          (dc >= 0 && dc <= 6 && (dr === 0 || dr === 6)) ||
+          (dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4);
+        mat[r][c] = on ? 1 : 2;
+        res[r][c] = 1;
+      }
+    }
+    placeFinder(0, 0); placeFinder(0, size - 7); placeFinder(size - 7, 0);
+
+    var apos = APOS[ver];
+    for (var i = 0; i < apos.length; i++) for (var j = 0; j < apos.length; j++) {
+      var r0 = apos[i], c0 = apos[j];
+      if ((r0 <= 8 && c0 <= 8) || (r0 <= 8 && c0 >= size - 9) || (r0 >= size - 9 && c0 <= 8)) continue;
+      for (var dr = -2; dr <= 2; dr++) for (var dc = -2; dc <= 2; dc++) {
+        var on = Math.max(Math.abs(dr), Math.abs(dc)) !== 1;
+        mat[r0 + dr][c0 + dc] = on ? 1 : 2;
+        res[r0 + dr][c0 + dc] = 1;
+      }
+    }
+
+    for (var i = 8; i < size - 8; i++) {
+      mat[6][i] = (i % 2 === 0) ? 1 : 2; res[6][i] = 1;
+      mat[i][6] = (i % 2 === 0) ? 1 : 2; res[i][6] = 1;
+    }
+
+    mat[size - 8][8] = 1; res[size - 8][8] = 1;
+
+    for (var i = 0; i < 9; i++) { res[8][i] = 1; res[i][8] = 1; }
+    for (var i = 0; i < 8; i++) { res[8][size - 1 - i] = 1; res[size - 1 - i][8] = 1; }
+    if (ver >= 7) {
+      for (var i = 0; i < 6; i++) for (var j = 0; j < 3; j++) {
+        res[size - 11 + j][i] = 1;
+        res[i][size - 11 + j] = 1;
+      }
+    }
+
+    var bitIdx = 0, totalBits = bytes.length * 8;
+    function getBit(i) { return i < totalBits ? (bytes[i >> 3] >> (7 - (i & 7))) & 1 : 0; }
+    for (var right = size - 1; right >= 1; right -= 2) {
+      if (right === 6) right = 5;
+      for (var vert = 0; vert < size; vert++) {
+        for (var j = 0; j < 2; j++) {
+          var x = right - j;
+          var upward = ((right + 1) & 2) === 0;
+          var y = upward ? size - 1 - vert : vert;
+          if (!res[y][x]) mat[y][x] = getBit(bitIdx++) ? 1 : 2;
+        }
+      }
+    }
+
+    var bestMask = 0, bestScore = Infinity;
+    for (var mask = 0; mask < 8; mask++) {
+      var m = []; for (var i = 0; i < size; i++) m.push(new Uint8Array(mat[i]));
+      applyMask(m, mask, res, size);
+      placeFormat(m, mask, size);
+      if (ver >= 7) placeVersion(m, ver, size);
+      var s = evalMask(m, size);
+      if (s < bestScore) { bestScore = s; bestMask = mask; }
+    }
+    var fm = []; for (var i = 0; i < size; i++) fm.push(new Uint8Array(mat[i]));
+    applyMask(fm, bestMask, res, size);
+    placeFormat(fm, bestMask, size);
+    if (ver >= 7) placeVersion(fm, ver, size);
+    return fm;
+  }
+
+  function applyMask(m, mask, res, size) {
+    for (var r = 0; r < size; r++) for (var c = 0; c < size; c++) {
+      if (res[r][c]) continue;
+      var flip;
+      switch (mask) {
+        case 0: flip = (r + c) % 2 === 0; break;
+        case 1: flip = r % 2 === 0; break;
+        case 2: flip = c % 3 === 0; break;
+        case 3: flip = (r + c) % 3 === 0; break;
+        case 4: flip = (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0; break;
+        case 5: flip = (r * c) % 2 + (r * c) % 3 === 0; break;
+        case 6: flip = ((r * c) % 2 + (r * c) % 3) % 2 === 0; break;
+        case 7: flip = ((r + c) % 2 + (r * c) % 3) % 2 === 0; break;
+      }
+      if (flip) m[r][c] ^= 3;
+    }
+  }
+
+  function placeFormat(m, mask, size) {
+    var f = FMT[mask];
+    for (var i = 0; i <= 5; i++) m[8][i] = ((f >> (14 - i)) & 1) ? 1 : 2;
+    m[8][7] = ((f >> 8) & 1) ? 1 : 2;
+    m[8][8] = ((f >> 7) & 1) ? 1 : 2;
+    m[7][8] = ((f >> 6) & 1) ? 1 : 2;
+    for (var i = 0; i <= 5; i++) m[5 - i][8] = ((f >> i) & 1) ? 1 : 2;
+    for (var i = 0; i <= 7; i++) m[8][size - 1 - i] = ((f >> (14 - i)) & 1) ? 1 : 2;
+    for (var i = 0; i <= 6; i++) m[size - 1 - i][8] = ((f >> i) & 1) ? 1 : 2;
+    m[size - 8][8] = 1;
+  }
+
+  function placeVersion(m, ver, size) {
+    var v = VINFO[ver];
+    for (var i = 0; i < 18; i++) {
+      var bit = (v >> i) & 1;
+      var r = Math.floor(i / 3), c = i % 3;
+      m[size - 11 + c][r] = bit ? 1 : 2;
+      m[r][size - 11 + c] = bit ? 1 : 2;
+    }
+  }
+
+  function evalMask(m, size) {
+    var score = 0;
+    for (var r = 0; r < size; r++) {
+      var last = -1, run = 0;
+      for (var c = 0; c < size; c++) {
+        if (m[r][c] === last) run++;
+        else { if (run >= 5) score += run - 2; last = m[r][c]; run = 1; }
+      }
+      if (run >= 5) score += run - 2;
+    }
+    for (var c = 0; c < size; c++) {
+      var last = -1, run = 0;
+      for (var r = 0; r < size; r++) {
+        if (m[r][c] === last) run++;
+        else { if (run >= 5) score += run - 2; last = m[r][c]; run = 1; }
+      }
+      if (run >= 5) score += run - 2;
+    }
+    return score;
+  }
+
+  function toSVG(mat) {
+    var size = mat.length;
+    var path = '';
+    for (var r = 0; r < size; r++) for (var c = 0; c < size; c++) {
+      if (mat[r][c] === 1) path += 'M' + c + ' ' + r + 'h1v1h-1z';
+    }
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + size + ' ' + size + '" shape-rendering="crispEdges">' +
+      '<rect width="' + size + '" height="' + size + '" fill="#fff"/>' +
+      '<path d="' + path + '" fill="#000"/></svg>';
+  }
+
+  return {
+    render: function (text) {
+      var mat = encode(text);
+      if (!mat) return null;
+      return toSVG(mat);
+    }
+  };
+})();
+
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var pn = $('pn');
+  var genBtn = $('gen-btn');
+  var qrBtn = $('qr-btn');
+  var dirty = false;
+  var qrVisible = false;
+  var lastVless = '';
 
-  function togglePanel(show) {
-    pn.style.display = show ? 'block' : 'none';
-  }
+  function togglePanel(show) { pn.style.display = show ? 'block' : 'none'; }
   $('trigger').addEventListener('click', function () {
     togglePanel(pn.style.display !== 'block');
   });
   $('pnc').addEventListener('click', function () { togglePanel(false); });
 
   var _k = ${JSON.stringify(b64sid)};
-  function uuid() {
-    try { return atob(_k); } catch (e) { return ''; }
-  }
+  function uuid() { try { return atob(_k); } catch (e) { return ''; } }
 
   function renderMeta() {
-    var u = uuid();
-    $('meta').innerHTML = 'UUID：<b>' + (u || '未设置') + '</b> · Host：<b>' +
-      (location.host || '由访问域名自动识别') + '</b>';
+    var u = uuid() || '未设置';
+    var h = location.host || '未知';
+    $('meta').innerHTML =
+      '<div class="k">UUID</div><div class="v">' + u + '</div>' +
+      '<div class="k">Host</div><div class="v">' + h + '</div>';
+  }
+
+  function markDirty() {
+    if (dirty) return;
+    dirty = true;
+    genBtn.classList.add('dirty');
+    genBtn.textContent = '参数已变更 · 点击更新';
+  }
+
+  function clearDirty() {
+    dirty = false;
+    genBtn.classList.remove('dirty');
+    genBtn.textContent = '生成';
   }
 
   function parseProxyURL(raw) {
@@ -898,14 +1220,14 @@ const render502 = b64sid => `<!DOCTYPE html>
     if (!m) return null;
     var proto = m[1].toLowerCase();
     var rest = m[2];
-    var username = '', password = '', hostPart = rest;
+    var user = '', pass = '', hostPart = rest;
     var at = rest.lastIndexOf('@');
     if (at !== -1) {
       var authPart = rest.substring(0, at);
       hostPart = rest.substring(at + 1);
       var c = authPart.indexOf(':');
-      if (c !== -1) { username = authPart.substring(0, c); password = authPart.substring(c + 1); }
-      else { username = authPart; }
+      if (c !== -1) { user = authPart.substring(0, c); pass = authPart.substring(c + 1); }
+      else { user = authPart; }
     }
     var host = hostPart, port = '';
     if (hostPart.charAt(0) === '[') {
@@ -915,18 +1237,21 @@ const render502 = b64sid => `<!DOCTYPE html>
       var ci = hostPart.lastIndexOf(':');
       if (ci !== -1) { host = hostPart.substring(0, ci); port = hostPart.substring(ci + 1); }
     }
-    return { proto: proto, username: username, password: password, host: host, port: port };
+    return { proto: proto, user: user, pass: pass, host: host, port: port };
   }
 
   function applyLink(raw) {
     var p = parseProxyURL(raw.trim());
     if (!p) return false;
     $('pr-host').value = p.host + (p.port ? ':' + p.port : '');
-    $('pr-user').value = p.username;
-    $('pr-pass').value = p.password;
+    $('pr-user').value = p.user;
+    $('pr-pass').value = p.pass;
+    var isSocks = /socks/.test(p.proto);
     var cur = $('ptype').value;
-    var scope = (cur === 'g5' || cur === 'gh') ? 'g' : '';
-    $('ptype').value = scope + (/socks/.test(p.proto) ? '5' : 'h');
+    var isGlobal = (cur === 'g5' || cur === 'gh');
+    $('ptype').value = isGlobal
+      ? (isSocks ? 'g5' : 'gh')
+      : (isSocks ? 's5' : 'h');
     return true;
   }
 
@@ -934,7 +1259,6 @@ const render502 = b64sid => `<!DOCTYPE html>
     var t = $('ptype').value;
     var params = ['ed=2560'];
     if ($('lowlat').checked) params.push('ll=1');
-
     if (t === 'ip') {
       var ip = $('ip-host').value.trim();
       if (ip) params.push('ip=' + encodeURIComponent(ip));
@@ -947,8 +1271,7 @@ const render502 = b64sid => `<!DOCTYPE html>
         var auth = '';
         if (user && pass) auth = user + ':' + pass + '@';
         else if (user) auth = user + '@';
-        var raw = proto + auth + host;
-        params.push(t + '=' + encodeURIComponent(raw));
+        params.push(t + '=' + encodeURIComponent(proto + auth + host));
       }
     }
     return '${CFG.pathPrefix}?' + params.join('&');
@@ -958,7 +1281,7 @@ const render502 = b64sid => `<!DOCTYPE html>
     var h = location.host;
     var u = uuid();
     var p = genPath();
-    var n = $('nm').value || 'SuperEdge v1.8.1';
+    var n = $('nm').value || 'SuperEdge';
     if (!u) return 'UUID 未设置（请与 CFG.id 同步）';
     var q = 'encryption=none&security=tls&sni=' + encodeURIComponent(h) +
             '&type=ws&host=' + encodeURIComponent(h) +
@@ -966,9 +1289,45 @@ const render502 = b64sid => `<!DOCTYPE html>
     return 'vless://' + u + '@' + h + ':443?' + q + '#' + encodeURIComponent(n);
   }
 
-  function update() {
-    $('out-path').value = genPath();
-    $('out-vless').value = genVless();
+  function updateQR() {
+    var box = $('qr-box');
+    var note = $('qr-note');
+    if (!qrVisible) return;
+    if (!lastVless) { box.innerHTML = ''; note.className = 'qr-err'; note.textContent = '请先生成 VLESS 链接'; return; }
+    var svg;
+    try { svg = QR.render(lastVless); } catch (e) { svg = null; }
+    if (!svg) {
+      box.innerHTML = '';
+      note.className = 'qr-err';
+      note.textContent = '链接过长，超出内置二维码容量上限（约 660 字节）';
+    } else {
+      box.innerHTML = svg;
+      note.className = 'qr-note';
+      note.textContent = '本地生成 · 链接不会上传';
+    }
+  }
+
+  function doGenerate() {
+    var path = genPath();
+    var vless = genVless();
+    $('out-path').value = path;
+    $('out-vless').value = vless;
+    lastVless = vless;
+    clearDirty();
+    updateQR();
+  }
+
+  function resetAll() {
+    $('ptype').value = 'direct';
+    $('ip-host').value = '';
+    $('pr-link').value = '';
+    $('pr-host').value = '';
+    $('pr-user').value = '';
+    $('pr-pass').value = '';
+    $('nm').value = 'SuperEdge';
+    $('lowlat').checked = false;
+    updateFields();
+    doGenerate();
   }
 
   function updateFields() {
@@ -990,22 +1349,47 @@ const render502 = b64sid => `<!DOCTYPE html>
     }
   }
 
-  ['ptype', 'ip-host', 'pr-host', 'pr-user', 'pr-pass', 'nm'].forEach(function (id) {
-    $(id).addEventListener('input', update);
-    $(id).addEventListener('change', function () { updateFields(); update(); });
-  });
-  $('lowlat').addEventListener('change', update);
+  $('ptype').addEventListener('change', function () { updateFields(); markDirty(); });
 
-  $('ptype').addEventListener('change', updateFields);
-  $('pr-link').addEventListener('input', function () {
-    if (applyLink(this.value)) { updateFields(); update(); }
+  ['ip-host', 'pr-host', 'pr-user', 'pr-pass', 'nm'].forEach(function (id) {
+    $(id).addEventListener('input', markDirty);
   });
+  $('lowlat').addEventListener('change', markDirty);
+
+  genBtn.addEventListener('click', doGenerate);
+  $('reset-btn').addEventListener('click', resetAll);
+
+  qrBtn.addEventListener('click', function () {
+    qrVisible = !qrVisible;
+    $('qr-wrap').classList.toggle('show', qrVisible);
+    qrBtn.textContent = qrVisible ? '隐藏二维码' : '显示二维码';
+    if (qrVisible) {
+      if (!lastVless) doGenerate();
+      else updateQR();
+    }
+  });
+
+  var _prTimer = 0;
+  $('pr-link').addEventListener('input', function () {
+    var self = this;
+    clearTimeout(_prTimer);
+    _prTimer = setTimeout(function () {
+      var v = self.value.trim();
+      if (!v) return;
+      if (applyLink(v)) {
+        self.value = '';
+        updateFields();
+        doGenerate();
+      }
+    }, 300);
+  });
+
   $('cp-path').addEventListener('click', function () { copyFrom('out-path', 'ok-path'); });
   $('cp-vless').addEventListener('click', function () { copyFrom('out-vless', 'ok-vless'); });
 
   updateFields();
   renderMeta();
-  update();
+  doGenerate();
 })();
 </script>
 </body>
