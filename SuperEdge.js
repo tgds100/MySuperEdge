@@ -1,23 +1,23 @@
 /**
- *  SuperEdge_无注释版 v1.8
+ *  SuperEdge_无注释版 v1.8.1
  * 【Path 格式】（全部以 /api/v1/chat 开头）
- *   纯直连        : /api/v1/chat?ed=2560
- *   proxyip 备用  : /api/v1/chat?ed=2560&proxyip=1.2.3.4:443
- *   局部 SOCKS5   : /api/v1/chat?ed=2560&token=sg-<B64U of "socks5://user:pass@host:port">
- *   局部 HTTP     : /api/v1/chat?ed=2560&token=sg-<B64U of "http://user:pass@host:port">
- *   全局 SOCKS5   : /api/v1/chat?ed=2560&token=wg-<B64U of "socks5://...">
- *   全局 HTTP     : /api/v1/chat?ed=2560&token=wg-<B64U of "http://...">
- *   低延迟模式    : 任意 path 后追加 &lowlat=1（SSH / 游戏 / 实时交互）
+ *   纯直连        : ?ed=2560
+ *   proxyip 备用  : ?ed=2560&ip=1.2.3.4:443
+ *   局部 SOCKS5   : ?ed=2560&s5=<URL-encoded "socks5://user:pass@host:port">
+ *   局部 HTTP     : ?ed=2560&h=<URL-encoded "http://user:pass@host:port">
+ *   全局 SOCKS5   : ?ed=2560&g5=<URL-encoded "socks5://user:pass@host:port">
+ *   全局 HTTP     : ?ed=2560&gh=<URL-encoded "http://user:pass@host:port">
+ *   低延迟模式    : 任意 path 后追加 &ll=1（SSH / 游戏 / 实时交互）
  *
  * 【出站优先级】
- *   wg-*   → 单路径全局代理，不 fallback（带超时兜底）
- *   其他   → Happy Eyeballs：直连 / sg-* / proxyip 按 stagger 梯度并发竞速
+ *   g5-* / gh-* → 单路径全局代理，不 fallback（带超时兜底）
+ *   其他        → Happy Eyeballs：直连 / s5 / h / ip 按 stagger 梯度并发竞速
  */
 
 import { connect } from 'cloudflare:sockets';
 
 const CFG = {
-  id: 'db3f3cbc-ec67-44bc-815c-e358e3cffde8',
+  id: 'UUID',        // ← 改成你自己的 UUID（标准 36 位带连字符），不要带空格。
 
   chunk: 64 * 1024,
   dnPack: 32 * 1024,
@@ -135,19 +135,16 @@ const parseAddressPort = seg => {
 const parseAuthHost = raw => {
   let username, password, hostPart = raw;
   const at = raw.lastIndexOf('@');
-  let authPart = '';
-  if (at !== -1) { authPart = raw.substring(0, at); hostPart = raw.substring(at + 1); }
-
-  if (authPart && authPart.includes(':')) {
-    [username, password] = authPart.split(':');
-  } else if (authPart) {
-    try {
-      let b64 = authPart.replace(/-/g, '+').replace(/_/g, '/');
-      while (b64.length % 4) b64 += '=';
-      const d = atob(b64);
-      const p = d.split(':');
-      if (p.length === 2) [username, password] = p;
-    } catch {}
+  if (at !== -1) {
+    const authPart = raw.substring(0, at);
+    hostPart = raw.substring(at + 1);
+    const colon = authPart.indexOf(':');
+    if (colon !== -1) {
+      username = authPart.substring(0, colon);
+      password = authPart.substring(colon + 1);
+    } else {
+      username = authPart;
+    }
   }
 
   const [h, p] = parseAddressPort(hostPart);
@@ -181,11 +178,6 @@ const parseProxyURL = raw => {
   const scheme = m[1].toLowerCase();
   const type = (scheme.includes('5') || scheme === 'socks') ? 'S5' : 'H';
   return { type, cfg };
-};
-
-const tryDecodeToken = str => {
-  if (str.includes('://')) return str;
-  try { return DEC.decode(b64urlDecode(str)); } catch { return str; }
 };
 
 const buildS5Connect = (type, addressRemote, portRemote) => {
@@ -714,27 +706,33 @@ const parseStrategy = searchParams => {
     lowLat: false,
   };
 
-  if (searchParams.get('lowlat') === '1') s.lowLat = true;
+  if (searchParams.get('ll') === '1') s.lowLat = true;
 
-  const token = searchParams.get('token');
-  if (token && token.length > 3) {
-    const prefix = token.slice(0, 3);
-    const rest = token.slice(3);
-    if (prefix === 'sg-' || prefix === 'wg-') {
-      const raw = tryDecodeToken(rest);
-      const proxy = parseProxyURL(raw);
-      if (proxy) {
-        if (prefix === 'sg-') {
-          if (proxy.type === 'S5') s.localSocks = proxy;
-          else s.localHttp = proxy;
-        } else {
-          s.globalGW = proxy;
-        }
-      }
-    }
+  const rawS5 = searchParams.get('s5');
+  if (rawS5) {
+    const proxy = parseProxyURL(rawS5);
+    if (proxy && proxy.type === 'S5') s.localSocks = proxy;
   }
 
-  const ipRaw = searchParams.get('proxyip') || searchParams.get('ip');
+  const rawH = searchParams.get('h');
+  if (rawH) {
+    const proxy = parseProxyURL(rawH);
+    if (proxy && proxy.type === 'H') s.localHttp = proxy;
+  }
+
+  const rawG5 = searchParams.get('g5');
+  if (rawG5) {
+    const proxy = parseProxyURL(rawG5);
+    if (proxy && proxy.type === 'S5') s.globalGW = proxy;
+  }
+
+  const rawGH = searchParams.get('gh');
+  if (rawGH) {
+    const proxy = parseProxyURL(rawGH);
+    if (proxy && proxy.type === 'H') s.globalGW = proxy;
+  }
+
+  const ipRaw = searchParams.get('ip') || searchParams.get('proxyip');
   if (ipRaw) {
     const [a, p = 443] = parseAddressPort(ipRaw);
     s.gwIP = { address: a.startsWith('[') ? a.slice(1, -1) : a, port: +p };
@@ -800,7 +798,7 @@ const render502 = b64sid => `<!DOCTYPE html>
 
 <div id="pn">
   <span class="close" id="pnc">×</span>
-  <h3>节点生成器 · SuperEdge v1.8</h3>
+  <h3>节点生成器 · SuperEdge v1.8.1</h3>
 
   <div class="meta" id="meta"></div>
 
@@ -808,17 +806,17 @@ const render502 = b64sid => `<!DOCTYPE html>
     <label>代理类型</label>
     <select id="ptype">
       <option value="direct">纯直连</option>
-      <option value="proxyip">proxyip 备用</option>
-      <option value="sg-socks5">局部 SOCKS5</option>
-      <option value="sg-http">局部 HTTP</option>
-      <option value="wg-socks5">全局 SOCKS5</option>
-      <option value="wg-http">全局 HTTP</option>
+      <option value="ip">proxyip 备用</option>
+      <option value="s5">局部 SOCKS5</option>
+      <option value="h">局部 HTTP</option>
+      <option value="g5">全局 SOCKS5</option>
+      <option value="gh">全局 HTTP</option>
     </select>
   </div>
 
-  <div id="f-proxyip" class="field collapse">
+  <div id="f-ip" class="field collapse">
     <label>proxyip 地址</label>
-    <input id="pi-host" type="text" placeholder="1.2.3.4:443 或 [2400::1]:443">
+    <input id="ip-host" type="text" placeholder="1.2.3.4:443 或 [2400::1]:443">
   </div>
 
   <div id="f-proxy" class="collapse">
@@ -827,7 +825,7 @@ const render502 = b64sid => `<!DOCTYPE html>
       <input id="pr-link" type="text" placeholder="socks5://user:pass@1.2.3.4:1080 或 http://1.2.3.4:8080">
     </div>
     <div class="field">
-      <label>代理地址（host:port）</label>
+      <label>代理地址</label>
       <input id="pr-host" type="text" placeholder="1.2.3.4:1080">
     </div>
     <div class="row">
@@ -844,7 +842,7 @@ const render502 = b64sid => `<!DOCTYPE html>
 
   <div class="field">
     <label>名称</label>
-    <input id="nm" type="text" value="SuperEdge v1.8">
+    <input id="nm" type="text" value="SuperEdge v1.8.1">
   </div>
 
   <div class="field chk">
@@ -927,36 +925,30 @@ const render502 = b64sid => `<!DOCTYPE html>
     $('pr-user').value = p.username;
     $('pr-pass').value = p.password;
     var cur = $('ptype').value;
-    var scope = (cur.indexOf('sg-') === 0) ? 'sg-' : (cur.indexOf('wg-') === 0 ? 'wg-' : 'sg-');
-    $('ptype').value = scope + (/socks/.test(p.proto) ? 'socks5' : 'http');
+    var scope = (cur === 'g5' || cur === 'gh') ? 'g' : '';
+    $('ptype').value = scope + (/socks/.test(p.proto) ? '5' : 'h');
     return true;
-  }
-
-  function b64urlEnc(str) {
-    var bytes = new TextEncoder().encode(str);
-    var bin = '';
-    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    return btoa(bin).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
   }
 
   function genPath() {
     var t = $('ptype').value;
     var params = ['ed=2560'];
-    if ($('lowlat').checked) params.push('lowlat=1');
-    if (t === 'proxyip') {
-      var ip = $('pi-host').value.trim();
-      if (ip) params.push('proxyip=' + encodeURIComponent(ip));
-    } else if (t.indexOf('sg-') === 0 || t.indexOf('wg-') === 0) {
+    if ($('lowlat').checked) params.push('ll=1');
+
+    if (t === 'ip') {
+      var ip = $('ip-host').value.trim();
+      if (ip) params.push('ip=' + encodeURIComponent(ip));
+    } else if (t === 's5' || t === 'h' || t === 'g5' || t === 'gh') {
       var host = $('pr-host').value.trim();
       var user = $('pr-user').value.trim();
       var pass = $('pr-pass').value.trim();
       if (host) {
-        var prefix = t.slice(0, 3);
-        var type = t.slice(3);
-        var proto = type === 'socks5' ? 'socks5://' : 'http://';
-        var auth = (user && pass) ? (user + ':' + pass + '@') : '';
+        var proto = (t === 's5' || t === 'g5') ? 'socks5://' : 'http://';
+        var auth = '';
+        if (user && pass) auth = user + ':' + pass + '@';
+        else if (user) auth = user + '@';
         var raw = proto + auth + host;
-        params.push('token=' + prefix + b64urlEnc(raw));
+        params.push(t + '=' + encodeURIComponent(raw));
       }
     }
     return '${CFG.pathPrefix}?' + params.join('&');
@@ -966,7 +958,7 @@ const render502 = b64sid => `<!DOCTYPE html>
     var h = location.host;
     var u = uuid();
     var p = genPath();
-    var n = $('nm').value || 'SuperEdge v1.8';
+    var n = $('nm').value || 'SuperEdge v1.8.1';
     if (!u) return 'UUID 未设置（请与 CFG.id 同步）';
     var q = 'encryption=none&security=tls&sni=' + encodeURIComponent(h) +
             '&type=ws&host=' + encodeURIComponent(h) +
@@ -981,8 +973,8 @@ const render502 = b64sid => `<!DOCTYPE html>
 
   function updateFields() {
     var t = $('ptype').value;
-    $('f-proxyip').classList.toggle('open', t === 'proxyip');
-    $('f-proxy').classList.toggle('open', t.indexOf('sg-') === 0 || t.indexOf('wg-') === 0);
+    $('f-ip').classList.toggle('open', t === 'ip');
+    $('f-proxy').classList.toggle('open', t === 's5' || t === 'h' || t === 'g5' || t === 'gh');
   }
 
   function copyFrom(inputId, okId) {
@@ -998,7 +990,7 @@ const render502 = b64sid => `<!DOCTYPE html>
     }
   }
 
-  ['ptype', 'pi-host', 'pr-host', 'pr-user', 'pr-pass', 'nm'].forEach(function (id) {
+  ['ptype', 'ip-host', 'pr-host', 'pr-user', 'pr-pass', 'nm'].forEach(function (id) {
     $(id).addEventListener('input', update);
     $(id).addEventListener('change', function () { updateFields(); update(); });
   });
