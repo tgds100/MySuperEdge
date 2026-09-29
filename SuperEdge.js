@@ -1,5 +1,5 @@
 /**
- *  SuperEdge_无注释版 v1.7
+ *  SuperEdge_无注释版 v1.8
  * 【Path 格式】（全部以 /api/v1/chat 开头）
  *   纯直连        : /api/v1/chat?ed=2560
  *   proxyip 备用  : /api/v1/chat?ed=2560&proxyip=1.2.3.4:443
@@ -7,9 +7,10 @@
  *   局部 HTTP     : /api/v1/chat?ed=2560&token=sg-<B64U of "http://user:pass@host:port">
  *   全局 SOCKS5   : /api/v1/chat?ed=2560&token=wg-<B64U of "socks5://...">
  *   全局 HTTP     : /api/v1/chat?ed=2560&token=wg-<B64U of "http://...">
+ *   低延迟模式    : 任意 path 后追加 &lowlat=1（SSH / 游戏 / 实时交互）
  *
  * 【出站优先级】
- *   wg-*   → 单路径全局代理，不 fallback
+ *   wg-*   → 单路径全局代理，不 fallback（带超时兜底）
  *   其他   → Happy Eyeballs：直连 / sg-* / proxyip 按 stagger 梯度并发竞速
  */
 
@@ -26,18 +27,22 @@ const CFG = {
 
   maxED: 8 * 1024,
 
-  concur: 2,
-  stagger: 700,
-  totalTimeout: 8000,
-  directLoserTimeout: 3000,
+  concur: 1,
+  stagger: 1200,
+  totalTimeout: 6000,
+  directLoserTimeout: 1500,
+  failTTL: 30_000,
+  failCacheMax: 512,
 
-  maxUQ: 16 * 1024 * 1024,
+  maxUQ: 32 * 1024 * 1024,
 
   pathPrefix: '/api/v1/chat',
+
+  lowLatPorts: [22, 23, 3389, 5900],
 };
 
 if (!/^[0-9a-fA-F-]{32,36}$/.test(CFG.id)) {
-  throw new Error('CFG.id 未设置或格式错误（应为标准 佑佑ID，如 12345678-1234-1234-1234-123456789abc）');
+  throw new Error('CFG.id 未设置或格式错误（应为标准 UUID，如 12345678-1234-1234-1234-123456789abc）');
 }
 
 const ENC = new TextEncoder();
@@ -50,6 +55,8 @@ const HTTP_TAIL = ENC.encode('User-Agent: Mozilla/5.0\r\nConnection: keep-alive\
 
 const VLESS_RESP_V0 = new Uint8Array([0, 0]);
 const VLESS_RESP_V1 = new Uint8Array([1, 0]);
+
+const LOW_LAT_PORTS = new Set(CFG.lowLatPorts);
 
 const hex = c => (c > 64 ? c + 9 : c) & 0xF;
 const idB = new Uint8Array(16);
@@ -324,16 +331,15 @@ const raceDirect = (h, p, concur) => {
   const ts = Array(concur).fill().map(() => sproutDirect(h, p));
   return Promise.any(ts).then(w => {
     for (const t of ts) {
-      let closed = false;
-      const closeOnce = s => {
-        if (closed || s === w) return;
-        closed = true;
-        try { s.close(); } catch {}
-      };
-      t.then(closeOnce, () => { closed = true; });
-      setTimeout(() => {
-        if (!closed) t.then(closeOnce, () => {});
-      }, CFG.directLoserTimeout);
+      if (t === w) continue;
+      t.then(
+        s => { if (s !== w) { try { s.close(); } catch {} } },
+        () => {}
+      );
+      Promise.race([
+        t.catch(() => null),
+        new Promise(r => setTimeout(() => r(null), CFG.directLoserTimeout)),
+      ]).then(s => { if (s && s !== w) { try { s.close(); } catch {} } });
     }
     return w;
   });
@@ -371,8 +377,9 @@ const raceHappy = (stages, staggerMs, totalTimeoutMs) => {
       if (nextIdx >= stages.length) return;
 
       const idx = nextIdx++;
-      stages[idx]().then(finish, () => {
+      stages[idx]().then(finish, err => {
         if (settled) return;
+        console.log(`[raceHappy] stage ${idx} failed:`, err?.message || err);
         failed++;
         if (failed === stages.length) {
           settled = true;
@@ -399,13 +406,54 @@ const raceHappy = (stages, staggerMs, totalTimeoutMs) => {
   });
 };
 
+const connectWithTimeout = (fn, ms, label) => {
+  let timedOut = false;
+  let timer = 0;
+  const p = Promise.resolve()
+    .then(fn)
+    .then(sock => {
+      if (timedOut) { try { sock.close(); } catch {} throw new Error(`${label} late arrival`); }
+      return sock;
+    });
+  const t = new Promise((_, rej) => {
+    timer = setTimeout(() => { timedOut = true; rej(new Error(`${label} timeout`)); }, ms);
+  });
+  return Promise.race([p, t]).finally(() => { if (timer) clearTimeout(timer); });
+};
+
+const FAIL_CACHE = new Map();
+
+const markFail = key => {
+  const now = Date.now();
+  if (FAIL_CACHE.size >= CFG.failCacheMax) {
+    const first = FAIL_CACHE.keys().next().value;
+    if (first !== undefined) FAIL_CACHE.delete(first);
+  }
+  FAIL_CACHE.set(key, now + CFG.failTTL);
+};
+
+const isFailed = key => {
+  const exp = FAIL_CACHE.get(key);
+  if (!exp) return false;
+  if (exp < Date.now()) { FAIL_CACHE.delete(key); return false; }
+  return true;
+};
+
 const connectToTarget = async (host, port, addressType, strategy) => {
   const { globalGW, localSocks, localHttp, gwIP, concur, stagger, totalTimeout } = strategy;
 
   if (globalGW) {
-    return globalGW.type === 'S5'
-      ? await s5Connect(addressType, host, port, globalGW.cfg)
-      : await hTunnelConnect(addressType, host, port, globalGW.cfg);
+    const fn = globalGW.type === 'S5'
+      ? () => s5Connect(addressType, host, port, globalGW.cfg)
+      : () => hTunnelConnect(addressType, host, port, globalGW.cfg);
+    return connectWithTimeout(fn, totalTimeout, 'globalGW');
+  }
+
+  const key = `${host}:${port}`;
+  if (isFailed(key)) {
+    if (localSocks) return s5Connect(addressType, host, port, localSocks.cfg);
+    if (localHttp)  return hTunnelConnect(addressType, host, port, localHttp.cfg);
+    if (gwIP)       return sproutIP(gwIP);
   }
 
   const stages = [];
@@ -414,8 +462,13 @@ const connectToTarget = async (host, port, addressType, strategy) => {
   if (localHttp)  stages.push(() => hTunnelConnect(addressType, host, port, localHttp.cfg));
   if (gwIP)       stages.push(() => sproutIP(gwIP));
 
-  if (stages.length === 1) return stages[0]();
-  return raceHappy(stages, stagger, totalTimeout);
+  try {
+    if (stages.length === 1) return await stages[0]();
+    return await raceHappy(stages, stagger, totalTimeout);
+  } catch (err) {
+    markFail(key);
+    throw err;
+  }
 };
 
 const mkK = (cap, cpy = 0) => {
@@ -465,7 +518,7 @@ const mkQ = cap => {
   };
 };
 
-const mkDn = w => {
+const mkDn = (w, lowLat = false) => {
   const cap = CFG.dnPack, tail = CFG.dnTail, low = Math.max(4096, tail * 12);
   const k = mkK(cap, 1);
   let tp = 0, gen = 0, qk = 0, qr = 0;
@@ -482,6 +535,7 @@ const mkDn = w => {
   const ripen = () => {
     if (k.e() || tp) return;
     if (k.b >= cap || cap - k.b < tail) return reap();
+    if (lowLat) return reap();
     tp = setTimeout(() => {
       tp = 0;
       if (k.e()) return;
@@ -508,9 +562,9 @@ const mkDn = w => {
   };
 };
 
-const mill = async (rd, w) => {
+const mill = async (rd, w, lowLat = false) => {
   const r = rd.getReader({ mode: 'byob' });
-  const tx = mkDn(w);
+  const tx = mkDn(w, lowLat);
   let buf = new ArrayBuffer(CFG.chunk);
   try {
     for (;;) {
@@ -524,7 +578,9 @@ const mill = async (rd, w) => {
       }
     }
     tx.reap();
-  } catch {} finally {
+  } catch (e) {
+    console.log('[mill]', e?.message || e);
+  } finally {
     try { tx.reap(); } catch {}
     try { r.releaseLock(); } catch {}
   }
@@ -565,7 +621,11 @@ const runSession = (server, req, strategy) => {
   const sow = d => {
     const u = toU8(d), n = u.byteLength;
     if (!n) return 1;
-    if (uq.b + n > CFG.maxUQ) { wither(); return 0; }
+    if (uq.b + n > CFG.maxUQ) {
+      console.log('[session] maxUQ exceeded:', uq.b + n, '>', CFG.maxUQ);
+      wither();
+      return 0;
+    }
     if (uq.sow(u)) return 1;
     wither();
     return 0;
@@ -582,13 +642,19 @@ const runSession = (server, req, strategy) => {
           const [d] = uq.bundle();
           if (!d) break;
           const r = relay(d);
-          if (!r) { wither(); break; }
+          if (!r) {
+            console.log('[session] invalid VLESS header');
+            wither();
+            break;
+          }
 
           server.send(d[0] === 0 ? VLESS_RESP_V0 : d[0] === 1 ? VLESS_RESP_V1 : new Uint8Array([d[0], 0]));
 
           const host = addr(r.addrType, r.targetAddrBytes);
           const port = r.port;
           const payload = d.subarray(r.dataOffset);
+
+          const lowLat = strategy.lowLat || LOW_LAT_PORTS.has(port);
 
           try {
             sock = await connectToTarget(host, port, r.addrType, strategy);
@@ -600,8 +666,9 @@ const runSession = (server, req, strategy) => {
             curW = sock.writable.getWriter();
             if (payload?.byteLength) await curW.write(payload);
 
-            mill(sock.readable, server).finally(() => wither());
-          } catch {
+            mill(sock.readable, server, lowLat).finally(() => wither());
+          } catch (e) {
+            console.log('[session] connect failed:', e?.message || e);
             wither();
             break;
           }
@@ -611,7 +678,11 @@ const runSession = (server, req, strategy) => {
         const [d] = uq.bundle();
         if (!d) break;
         try { await curW.write(d); }
-        catch { wither(); break; }
+        catch (e) {
+          console.log('[session] write failed:', e?.message || e);
+          wither();
+          break;
+        }
       }
     } finally {
       busy = false;
@@ -625,7 +696,10 @@ const runSession = (server, req, strategy) => {
     if (!closed && sow(e.data)) thresh();
   });
   server.addEventListener('close', wither);
-  server.addEventListener('error', wither);
+  server.addEventListener('error', e => {
+    console.log('[session] ws error:', e?.message || e);
+    wither();
+  });
 };
 
 const parseStrategy = searchParams => {
@@ -637,7 +711,10 @@ const parseStrategy = searchParams => {
     concur: CFG.concur,
     stagger: CFG.stagger,
     totalTimeout: CFG.totalTimeout,
+    lowLat: false,
   };
+
+  if (searchParams.get('lowlat') === '1') s.lowLat = true;
 
   const token = searchParams.get('token');
   if (token && token.length > 3) {
@@ -709,6 +786,8 @@ const render502 = b64sid => `<!DOCTYPE html>
   .ok { color: #2a9d2a; font-size: 11px; margin-left: 6px; }
   .note { margin-top: 10px; color: #aaa; font-size: 11px; line-height: 1.5; }
   .warn { color: #e05454; font-weight: 600; }
+  .chk { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #666; }
+  .chk input { width: auto; }
 </style>
 </head>
 <body>
@@ -721,7 +800,7 @@ const render502 = b64sid => `<!DOCTYPE html>
 
 <div id="pn">
   <span class="close" id="pnc">×</span>
-  <h3>节点生成器 · SuperEdge v1.7</h3>
+  <h3>节点生成器 · SuperEdge v1.8</h3>
 
   <div class="meta" id="meta"></div>
 
@@ -765,7 +844,12 @@ const render502 = b64sid => `<!DOCTYPE html>
 
   <div class="field">
     <label>名称</label>
-    <input id="nm" type="text" value="SuperEdge v1.7">
+    <input id="nm" type="text" value="SuperEdge v1.8">
+  </div>
+
+  <div class="field chk">
+    <input id="lowlat" type="checkbox">
+    <label for="lowlat" style="margin:0;cursor:pointer">低延迟模式（SSH / 游戏 / 实时交互）</label>
   </div>
 
   <div class="divider">
@@ -858,6 +942,7 @@ const render502 = b64sid => `<!DOCTYPE html>
   function genPath() {
     var t = $('ptype').value;
     var params = ['ed=2560'];
+    if ($('lowlat').checked) params.push('lowlat=1');
     if (t === 'proxyip') {
       var ip = $('pi-host').value.trim();
       if (ip) params.push('proxyip=' + encodeURIComponent(ip));
@@ -881,7 +966,7 @@ const render502 = b64sid => `<!DOCTYPE html>
     var h = location.host;
     var u = uuid();
     var p = genPath();
-    var n = $('nm').value || 'SuperEdge v1.7';
+    var n = $('nm').value || 'SuperEdge v1.8';
     if (!u) return 'UUID 未设置（请与 CFG.id 同步）';
     var q = 'encryption=none&security=tls&sni=' + encodeURIComponent(h) +
             '&type=ws&host=' + encodeURIComponent(h) +
@@ -917,6 +1002,7 @@ const render502 = b64sid => `<!DOCTYPE html>
     $(id).addEventListener('input', update);
     $(id).addEventListener('change', function () { updateFields(); update(); });
   });
+  $('lowlat').addEventListener('change', update);
 
   $('ptype').addEventListener('change', updateFields);
   $('pr-link').addEventListener('input', function () {
@@ -933,7 +1019,8 @@ const render502 = b64sid => `<!DOCTYPE html>
 </body>
 </html>`;
 
-const HTML_502 = render502(btoa(CFG.id));
+let _html502 = null;
+const get502 = () => _html502 ||= render502(btoa(CFG.id));
 
 const HTML_HEADERS = {
   'Content-Type': 'text/html; charset=utf-8',
@@ -947,11 +1034,11 @@ export default {
     const url = new URL(req.url);
 
     if (req.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
-      return new Response(HTML_502, { status: 502, headers: HTML_HEADERS });
+      return new Response(get502(), { status: 502, headers: HTML_HEADERS });
     }
 
     if (!url.pathname.startsWith(CFG.pathPrefix)) {
-      return new Response(HTML_502, { status: 502, headers: HTML_HEADERS });
+      return new Response(get502(), { status: 502, headers: HTML_HEADERS });
     }
 
     const strategy = parseStrategy(url.searchParams);
