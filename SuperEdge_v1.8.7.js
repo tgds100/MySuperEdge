@@ -1,11 +1,22 @@
 import { connect } from 'cloudflare:sockets';
-
+/*
+ *  SuperEdge_v1.8.7 
+ *  专为面向 5-10 人场景 做极简优化
+ * 【版本更新内容】
+ *   · 删除全部结构化日志（省 CPU，免费版 10ms 限制下关键）
+ *   · failCacheMax: 512 → 128（省内存）
+ *   · ll=2 的 dnHigh: 8MB → 7MB，dnLow: 2MB → 1.75MB（留更多余量）
+ *   · activeSessions 加 try/finally 保护（防计数器失准）
+ *   · sock 泄漏修复（会话已关时立即释放 socket）
+ *   · minPerSession 保持 4MB（5-10 人场景下安全）
+ */
 const CFG = {
   // ─── 身份 ───
   id: 'UUID',                       // ← 部署时需改成你自己的 UUID（标准 36 位带连字符），不要带空格
   // ─── 面板安全 ───
-  panelKey: 'admin',                // ← 关卡 1：路由暗号，访问 /?panel=admin 才看到面板，部署时需改
-  panelPin: 'mykey123',             // ← 关卡 2：解锁 PIN，必须 ≥8 位，部署时需改
+  panelKey: 'admin',                // ← 关卡 1：路由暗号，访问 /?panel=admin 才看到面板 ， 部署时需改成你自己的panelKey
+  panelPin: 'mykey123',             // ← 关卡 2：解锁 PIN，必须 ≥8 位 ， 部署时需改成你自己的panelKey
+  
   
   maxED: 8 * 1024,
   concur: 1,
