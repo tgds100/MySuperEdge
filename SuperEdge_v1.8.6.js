@@ -1,5 +1,3 @@
-
-
 import { connect } from 'cloudflare:sockets';
 /*
  *  SuperEdge_v1.8.6
