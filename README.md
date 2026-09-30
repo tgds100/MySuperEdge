@@ -1,4 +1,6 @@
 # SuperEdge v1.8.7
+  v1.8.7 版本在高速下载时更保守。
+  对于单用户极限下载，v1.8.6 版本可能略微激进一点；但对于多人长期使用，v1.8.7 版本更稳。
 
 > 部署在 Cloudflare Workers 上的轻量级 VLESS-over-WebSocket 节点服务
 
