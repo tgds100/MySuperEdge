@@ -1,11 +1,23 @@
-import { connect } from 'cloudflare:sockets';
 
+
+import { connect } from 'cloudflare:sockets';
+/*
+ *  SuperEdge_v1.8.6
+ * 【版本更新内容】
+ *   · 三档下行模式（ll=0 / ll=1 / ll=2）：
+ *   · 参数归位：模式相关字段从 CFG 迁入 PROFILES，字段归属清晰
+ *   · ll=0 均衡（默认）· ll=1 低延迟激进 · ll=2 高速下载激进
+ *   · ll=0 不写参数；不填 ll 与 ll=0 走同一路径（代码统一）
+ *   · 移除端口自动判定，只通过 ll 参数决定模式
+ *   · mkDn / mill / drainDownstream / mkQ 统一接收 profile 对象
+ *   · 面板 UI 改为下拉选择，附带场景说明与风险提示
+ */
 const CFG = {
   // ─── 身份 ───
   id: 'UUID',                       // ← 部署时需改成你自己的 UUID（标准 36 位带连字符），不要带空格
   // ─── 面板安全 ───
-  panelKey: 'admin',                // ← 关卡 1：路由暗号，访问 /?panel=admin 才看到面板，部署时需改
-  panelPin: 'mykey123',             // ← 关卡 2：解锁 PIN，必须 ≥8 位，部署时需改
+  panelKey: 'admin',                // ← 关卡 1：路由暗号，访问 /?panel=admin 才看到面板 ， 部署时需改成你自己的panelKey
+  panelPin: 'mykey123',             // ← 关卡 2：解锁 PIN，必须 ≥8 位 ， 部署时需改成你自己的panelKey
   
   maxED: 8 * 1024,
   concur: 1,
