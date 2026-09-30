@@ -1,4 +1,4 @@
-# SuperEdge
+# SuperEdge v1.8.7
 
 > 部署在 Cloudflare Workers 上的轻量级 VLESS-over-WebSocket 节点服务
 
